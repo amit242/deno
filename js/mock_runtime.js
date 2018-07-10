@@ -61,6 +61,59 @@ global.DoubleRecvFails = () => {
   deno.recv((channel, msg) => assert(false));
 };
 
+global.SendRecvSlice = () => {
+  const abLen = 1024;
+  let buf = new Uint8Array(abLen);
+  for (let i = 0; i < 5; i++) {
+    // Write some value to first and last byte.
+    buf[0] = 100 + i;
+    buf[buf.length - 1] = 100 - i;
+    // On the native side, the slice is shortened by 19 bytes.
+    buf = deno.send(buf);
+    assert(buf.byteOffset === i * 11);
+    assert(buf.byteLength === abLen - i * 30 - 19);
+    assert(buf.buffer.byteLength == abLen);
+    // Look for values written by the backend.
+    assert((buf[0] = 200 + i));
+    assert((buf[buf.length - 1] = 200 - i));
+    // On the JS side, the start of the slice is moved up by 11 bytes.
+    buf = buf.subarray(11);
+    assert(buf.byteOffset === (i + 1) * 11);
+    assert(buf.byteLength === abLen - (i + 1) * 30);
+  }
+};
+
+global.JSSendArrayBufferViewTypes = () => {
+  // Test that ArrayBufferView slices are transferred correctly.
+  // Send Uint8Array.
+  const ab1 = new ArrayBuffer(4321);
+  const u8 = new Uint8Array(ab1, 2468, 1000);
+  u8[0] = 1;
+  deno.send(u8);
+  // Send Uint32Array.
+  const ab2 = new ArrayBuffer(4321);
+  const u32 = new Uint32Array(ab2, 2468, 1000 / Uint32Array.BYTES_PER_ELEMENT);
+  u32[0] = 0x02020202;
+  deno.send(u32);
+  // Send DataView.
+  const ab3 = new ArrayBuffer(4321);
+  const dv = new DataView(ab3, 2468, 1000);
+  dv.setUint8(0, 3);
+  deno.send(dv);
+};
+
+global.JSSendNeutersBuffer = () => {
+  // Buffer should be neutered after transferring it to the native side.
+  const u8 = new Uint8Array([42]);
+  assert(u8.byteLength === 1);
+  assert(u8.buffer.byteLength === 1);
+  assert(u8[0] === 42);
+  const r = deno.send(u8);
+  assert(u8.byteLength === 0);
+  assert(u8.buffer.byteLength === 0);
+  assert(u8[0] === undefined);
+};
+
 // The following join has caused SnapshotBug to segfault when using kKeep.
 [].join("");
 

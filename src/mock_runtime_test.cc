@@ -92,6 +92,65 @@ TEST(MockRuntimeTest, DoubleRecvFails) {
   deno_delete(d);
 }
 
+TEST(MockRuntimeTest, SendRecvSlice) {
+  static int count = 0;
+  Deno* d = deno_new(nullptr, [](auto deno, auto buf) {
+    static const size_t alloc_len = 1024;
+    int i = count++;
+    // Check the size and offset of the slice.
+    size_t data_offset = buf.data_ptr - buf.alloc_ptr;
+    EXPECT_EQ(data_offset, i * 11);
+    EXPECT_EQ(buf.data_len, alloc_len - i * 30);
+    EXPECT_EQ(buf.alloc_len, alloc_len);
+    // Check values written by the JS side.
+    EXPECT_EQ(buf.data_ptr[0], 100 + i);
+    EXPECT_EQ(buf.data_ptr[buf.data_len - 1], 100 - i);
+    // Make copy of the backing buffer -- this is currently necessary because
+    // deno_set_response() takes ownership over the buffer, but we are not given
+    // ownership of `buf` by our caller.
+    uint8_t* alloc_ptr = reinterpret_cast<uint8_t*>(malloc(alloc_len));
+    memcpy(alloc_ptr, buf.alloc_ptr, alloc_len);
+    // Make a slice that is a bit shorter than the original.
+    deno_buf buf2{alloc_ptr, alloc_len, alloc_ptr + data_offset,
+                  buf.data_len - 19};
+    // Place some values into the buffer for the JS side to verify.
+    buf2.data_ptr[0] = 100 + i;
+    buf2.data_ptr[buf2.data_len - 1] = 100 + i;
+    // Send back.
+    deno_set_response(deno, buf2);
+  });
+  EXPECT_TRUE(deno_execute(d, "a.js", "SendRecvSlice()"));
+  EXPECT_EQ(count, 5);
+  deno_delete(d);
+}
+
+TEST(MockRuntimeTest, JSSendArrayBufferViewTypes) {
+  static int count = 0;
+  Deno* d = deno_new(nullptr, [](auto _, auto buf) {
+    count++;
+    size_t data_offset = buf.data_ptr - buf.alloc_ptr;
+    EXPECT_EQ(data_offset, 2468);
+    EXPECT_EQ(buf.data_len, 1000);
+    EXPECT_EQ(buf.alloc_len, 4321);
+    EXPECT_EQ(buf.data_ptr[0], count);
+  });
+  EXPECT_TRUE(deno_execute(d, "a.js", "JSSendArrayBufferViewTypes()"));
+  EXPECT_EQ(count, 3);
+  deno_delete(d);
+}
+
+TEST(MockRuntimeTest, JSSendNeutersBuffer) {
+  static int count = 0;
+  Deno* d = deno_new(nullptr, [](auto _, auto buf) {
+    count++;
+    EXPECT_EQ(buf.data_len, 1);
+    EXPECT_EQ(buf.data_ptr[0], 42);
+  });
+  EXPECT_TRUE(deno_execute(d, "a.js", "JSSendNeutersBuffer()"));
+  EXPECT_EQ(count, 1);
+  deno_delete(d);
+}
+
 TEST(MockRuntimeTest, TypedArraySnapshots) {
   Deno* d = deno_new(nullptr, nullptr);
   EXPECT_TRUE(deno_execute(d, "a.js", "TypedArraySnapshots()"));
